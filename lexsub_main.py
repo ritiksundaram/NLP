@@ -57,13 +57,76 @@ def wn_frequency_predictor(context: Context) -> str:
         return frequency_dict.most_common(1)[0][0]
     else:
         return lemma
+def wn_simple_lesk_predictor(context: Context) -> str:
+    best_sense = None
+    max_overlap = 0
+    context_tokens = set(tokenize(context.left_context + ' ' + context.right_context))
+    
+    for synset in wn.synsets(context.lemma, pos=context.pos):
+        gloss_tokens = set(tokenize(synset.definition()))
+        overlap = len(context_tokens.intersection(gloss_tokens))
+        
+        if overlap > max_overlap:
+            max_overlap = overlap
+            best_sense = synset
+    
+    if best_sense:
+        return best_sense.lemmas()[0].name().replace('_', ' ')
+    else:
+        return context.lemma
+class Word2VecSubst(object):
+    
+    def __init__(self, filename):
+        self.model = gensim.models.KeyedVectors.load_word2vec_format(filename, binary=True)    
+
+    def predict_nearest(self, context: Context) -> str:
+        candidates = get_candidates(context.lemma, context.pos)
+        best_candidate = None
+        best_similarity = -1
+        
+        for candidate in candidates:
+            try:
+                similarity = self.model.similarity(candidate.replace(' ', '_'), context.lemma.replace(' ', '_'))
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_candidate = candidate
+            except KeyError:
+                continue
+        
+        return best_candidate if best_candidate else context.lemma
+class BertPredictor(object):
+
+    def __init__(self): 
+        self.tokenizer = transformers.DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+        self.model = transformers.TFDistilBertForMaskedLM.from_pretrained('distilbert-base-uncased')
+
+    def predict(self, context: Context) -> str:
+        # Replace the target lemma with the [MASK] token and tokenize
+        text = context.left_context + ' [MASK] ' + context.right_context
+        input_ids = self.tokenizer.encode(text, return_tensors="tf")
+        
+        # Predict the masked token
+        mask_token_index = np.where(input_ids == self.tokenizer.mask_token_id)[1]
+        token_logits = self.model(input_ids)[0]
+        mask_token_logits = token_logits[0, mask_token_index, :]
+        
+        # Get the top token predicted
+        top_token = np.argmax(mask_token_logits).numpy()
+        predicted_token = self.tokenizer.decode([top_token])
+        
+        return predicted_token
 
 # Add additional functionality as needed here, such as evaluation methods or integration with embeddings
 
 if __name__ == "__main__":
-    # Example usage
-    context = Context(lemma='happy', pos='a', left_context='I am very', right_context='today.')
-    print("Smurf Predictor:", smurf_predictor(context))
-    print("WordNet Frequency Predictor:", wn_frequency_predictor(context))
+   # At submission time, this program should run your best predictor (part 6).
 
-    # Load your dataset, process it, and use the above functions for lexical substitution
+    #W2VMODEL_FILENAME = 'GoogleNews-vectors-negative300.bin.gz'
+    #predictor = Word2VecSubst(W2VMODEL_FILENAME)
+
+    for context in read_lexsub_xml(sys.argv[1]):
+        #print(context)  # useful for debugging
+        prediction = smurf_predictor(context) 
+        print("{}.{} {} :: {}".format(context.lemma, context.pos, context.cid, prediction))
+
+
